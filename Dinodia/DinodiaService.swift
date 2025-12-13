@@ -82,24 +82,16 @@ enum DinodiaService {
                 }
 
                 if let adminConnection {
-                    // Update tenant's haConnectionId to match admin's
-                    let updatePayload = ["haConnectionId": adminConnection.id]
-                    _ = try await SupabaseREST.update(
-                        "User",
-                        filters: [URLQueryItem(name: "id", value: "eq.\(relations.summary.id)")],
-                        payload: updatePayload
-                    ) as UserSummary
-                    relations = try await fetchUserWithRelations(userId: relations.summary.id)
-                    haConnection = adminConnection
                     if admin.haConnectionId == nil {
-                        // ensure admin row stored id as well
-                        let adminUpdate = ["haConnectionId": adminConnection.id]
-                        _ = try await SupabaseREST.update(
-                            "User",
-                            filters: [URLQueryItem(name: "id", value: "eq.\(admin.id)")],
-                            payload: adminUpdate
-                        ) as UserSummary
+                        await updateUserHaConnectionId(adminConnection.id, userId: admin.id)
                     }
+                    if relations.summary.haConnectionId != adminConnection.id {
+                        await updateUserHaConnectionId(adminConnection.id, userId: relations.summary.id)
+                        if let refreshed = try? await fetchUserWithRelations(userId: relations.summary.id) {
+                            relations = refreshed
+                        }
+                    }
+                    haConnection = adminConnection
                 }
             }
         }
@@ -109,6 +101,18 @@ enum DinodiaService {
         }
 
         return (relations, resolvedConnection)
+    }
+
+    private static func updateUserHaConnectionId(_ connectionId: Int, userId: Int) async {
+        do {
+            _ = try await SupabaseREST.update(
+                "User",
+                filters: [URLQueryItem(name: "id", value: "eq.\(userId)")],
+                payload: ["haConnectionId": connectionId]
+            ) as UserSummary
+        } catch {
+            print("DinodiaService: unable to persist haConnectionId for user \(userId): \(error.localizedDescription)")
+        }
     }
 
     static func fetchDevicesForUser(userId: Int, mode: HaMode) async throws -> [UIDevice] {
