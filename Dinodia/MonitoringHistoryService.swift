@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 private struct MonitoringReading: Decodable {
     let entityId: String
@@ -17,53 +18,28 @@ enum MonitoringHistoryError: LocalizedError {
 }
 
 enum MonitoringHistoryService {
-    private static let defaultDays: [HistoryBucket: Int] = [
-        .daily: 30,
-        .weekly: 84,
-        .monthly: 365,
-    ]
+    static func fetchHistory(entityId: String, bucket: HistoryBucket, role: Role?) async throws -> HistoryResult {
+        return try await fetchViaPlatformAPI(entityId: entityId, bucket: bucket, role: role)
+    }
 
-    static func fetchHistory(userId: Int, entityId: String, bucket: HistoryBucket) async throws -> HistoryResult {
-        let (_, connection) = try await DinodiaService.getUserWithHaConnection(userId: userId)
-        let days = defaultDays[bucket] ?? 30
-        let fromDate = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
-        let iso = iso8601String(from: fromDate)
-
+    private static func fetchViaPlatformAPI(entityId: String, bucket: HistoryBucket, role: Role?) async throws -> HistoryResult {
+        let basePath: String
+        if role == .TENANT {
+            basePath = "/api/tenant/monitoring/history"
+        } else {
+            basePath = "/api/admin/monitoring/history"
+        }
+        let path = "\(basePath)?entityId=\(encodePathComponent(entityId))&bucket=\(bucket.rawValue)"
         do {
-            let filters = [
-                URLQueryItem(name: "haConnectionId", value: "eq.\(connection.id)"),
-                URLQueryItem(name: "entityId", value: "eq.\(entityId)"),
-                URLQueryItem(name: "capturedAt", value: "gte.\(iso)"),
-                URLQueryItem(name: "order", value: "capturedAt"),
-            ]
-            let readings: [MonitoringReading] = try await SupabaseREST.get("MonitoringReading", filters: filters)
-            return aggregate(readings: readings, bucket: bucket)
+            let result: PlatformFetchResult<HistoryResult> = try await PlatformFetch.request(path, method: "GET")
+            return result.data
         } catch {
-            if let api = EnvConfig.dinodiaPlatformAPI {
-                return try await fetchViaPlatformAPI(baseURL: api, userId: userId, entityId: entityId, bucket: bucket)
-            }
-            throw error
+            throw MonitoringHistoryError.unableToLoad
         }
     }
 
-    private static func fetchViaPlatformAPI(baseURL: URL, userId: Int, entityId: String, bucket: HistoryBucket) async throws -> HistoryResult {
-        var request = URLRequest(url: baseURL.appendingPathComponent("api/admin/monitoring/history"))
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let payload: [String: Any] = [
-            "userId": userId,
-            "entityId": entityId,
-            "bucket": bucket.rawValue,
-        ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-            throw MonitoringHistoryError.unableToLoad
-        }
-        if let result = try? JSONDecoder().decode(HistoryResult.self, from: data) {
-            return result
-        }
-        throw MonitoringHistoryError.unableToLoad
+    private static func encodePathComponent(_ value: String) -> String {
+        value.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? value
     }
 
     private static func aggregate(readings: [MonitoringReading], bucket: HistoryBucket) -> HistoryResult {

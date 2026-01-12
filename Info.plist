@@ -41,13 +41,19 @@
     <true/>
     <key>NSAppTransportSecurity</key>
     <dict>
-        <key>NSAllowsArbitraryLoads</key>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+        <key>NSAllowsArbitraryLoadsInLocalNetworking</key>
         <true/>
     </dict>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Dinodia needs access to your local network to connect to your Dinodia Hub on your home Wi‑Fi.</string>
     <key>LSApplicationQueriesSchemes</key>
     <array>
         <string>spotify</string>
     </array>
+    <key>NSCameraUsageDescription</key>
+    <string>Camera is used to scan QR codes for Dinodia Hub setup and device pairing.</string>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>

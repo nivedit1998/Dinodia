@@ -18,60 +18,17 @@ enum LabelCategory: String {
     case other = "Other"
 }
 
-private let LABEL_MAP: [String: LabelCategory] = [
-    "light": .light,
-    "lights": .light,
-    "blind": .blind,
-    "blinds": .blind,
-    "shade": .blind,
-    "shades": .blind,
-    "tv": .tv,
-    "television": .tv,
-    "speaker": .speaker,
-    "speakers": .speaker,
-    "audio": .speaker,
-    "boiler": .boiler,
-    "heating": .boiler,
-    "thermostat": .thermostat,
-    "doorbell": .security,
-    "security": .security,
-    "home security": .security,
-    "spotify": .spotify,
-    "switch": .switch,
-    "switches": .switch,
-    "media": .media,
-    "media player": .media,
-    "motion": .motionSensor,
-    "motion sensor": .motionSensor,
-    "sensor": .sensor,
-    "vacuum": .vacuum,
-    "camera": .camera,
-]
-
-let LABEL_ORDER: [String] = [
-    "Light",
-    "Blind",
-    "Motion Sensor",
-    "Spotify",
-    "Boiler",
-    "Doorbell",
-    "Home Security",
-    "TV",
-    "Speaker",
-]
-
-let OTHER_LABEL = "Other"
-private let labelOrderLower = LABEL_ORDER.map { $0.lowercased() }
+let LABEL_ORDER: [String] = LabelRegistry.orderedLabels
+let OTHER_LABEL = LabelRegistry.other
 
 func normalizeLabel(_ value: String?) -> String {
     value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 }
 
 func classifyDeviceByLabel(_ labels: [String]) -> String? {
-    let lowered = labels.map { $0.lowercased() }
-    for (key, category) in LABEL_MAP {
-        if lowered.contains(key) {
-            return category.rawValue
+    for label in labels {
+        if let canonical = LabelRegistry.canonical(from: label) {
+            return canonical
         }
     }
     return nil
@@ -79,25 +36,26 @@ func classifyDeviceByLabel(_ labels: [String]) -> String? {
 
 func getPrimaryLabel(for device: UIDevice) -> String {
     let override = normalizeLabel(device.label)
-    if !override.isEmpty { return override }
+    if !override.isEmpty {
+        return LabelRegistry.canonical(from: override) ?? override
+    }
     if let labels = device.labels, let first = labels.first {
         let normalized = normalizeLabel(first)
-        if !normalized.isEmpty { return normalized }
+        if !normalized.isEmpty {
+            return LabelRegistry.canonical(from: normalized) ?? normalized
+        }
     }
-    return normalizeLabel(device.labelCategory) ?? OTHER_LABEL
+    if let category = LabelRegistry.canonical(from: device.labelCategory) {
+        return category
+    }
+    return OTHER_LABEL
 }
 
 func getGroupLabel(for device: UIDevice) -> String {
     let label = getPrimaryLabel(for: device)
-    let idx = labelOrderLower.firstIndex(of: label.lowercased())
-    return idx != nil ? LABEL_ORDER[idx!] : OTHER_LABEL
+    return LabelRegistry.groupLabel(for: label)
 }
 
 func sortLabels(_ labels: [String]) -> [String] {
-    labels.sorted { a, b in
-        let idxA = labelOrderLower.firstIndex(of: a.lowercased()) ?? LABEL_ORDER.count
-        let idxB = labelOrderLower.firstIndex(of: b.lowercased()) ?? LABEL_ORDER.count
-        if idxA != idxB { return idxA < idxB }
-        return a.localizedCaseInsensitiveCompare(b) == .orderedAscending
-    }
+    LabelRegistry.sortLabels(labels)
 }

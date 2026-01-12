@@ -1,26 +1,5 @@
 import Foundation
 
-private let primaryCategories: Set<String> = [
-    "light",
-    "blind",
-    "tv",
-    "speaker",
-    "boiler",
-    "spotify",
-    "switch",
-    "thermostat",
-    "media",
-    "vacuum",
-    "camera",
-    "security",
-]
-
-private let sensorCategories: Set<String> = ["sensor", "motion sensor"]
-
-private func normalizeCategory(_ value: String?) -> String {
-    (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-}
-
 func isDetailDevice(state: String) -> Bool {
     let trimmed = state.trimmingCharacters(in: .whitespacesAndNewlines)
     if trimmed.isEmpty { return false }
@@ -29,15 +8,21 @@ func isDetailDevice(state: String) -> Bool {
 }
 
 func isSensorDevice(_ device: UIDevice) -> Bool {
-    let category = normalizeCategory(device.labelCategory)
-    if sensorCategories.contains(category) { return true }
+    let label = getPrimaryLabel(for: device)
+    if LabelRegistry.isSensor(label: label) { return true }
     if isDetailDevice(state: device.state) { return true }
     return false
 }
 
 func isPrimaryDevice(_ device: UIDevice) -> Bool {
-    let category = normalizeCategory(device.labelCategory)
-    if primaryCategories.contains(category) { return true }
+    let label = getPrimaryLabel(for: device)
+    // Only show devices with kiosk-approved primary labels.
+    guard LabelRegistry.isPrimary(label: label) else { return false }
+    // Motion sensors should appear on the dashboard even though they are sensors.
+    if label == "Motion Sensor" {
+        return !isDetailDevice(state: device.state)
+    }
     if isSensorDevice(device) { return false }
+    if LabelRegistry.isDetailOnly(label: label) { return false }
     return !isDetailDevice(state: device.state)
 }

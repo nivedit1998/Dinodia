@@ -10,6 +10,22 @@ func brightnessPercent(for device: UIDevice) -> Int? {
     return nil
 }
 
+func blindPositionPercent(for device: UIDevice) -> Int? {
+    let keys = ["blind_position", "position", "current_position", "position_percent"]
+    for key in keys {
+        if let value = device.attributes[key]?.anyValue as? Double, value.isFinite {
+            return Int(round(value))
+        }
+        if let value = device.attributes[key]?.anyValue as? Int {
+            return value
+        }
+        if let value = device.attributes[key]?.anyValue as? String, let num = Double(value) {
+            return Int(round(num))
+        }
+    }
+    return nil
+}
+
 func secondaryText(for device: UIDevice) -> String {
     let state = device.state
     let label = getPrimaryLabel(for: device)
@@ -27,14 +43,24 @@ func secondaryText(for device: UIDevice) -> String {
         if state.lowercased() == "paused" { return "Paused" }
         return state
     case "Boiler":
-        let target = device.attributes["temperature"]?.anyValue as? Double
-        let current = device.attributes["current_temperature"]?.anyValue as? Double
-        if let target, let current {
-            return "Target \(Int(target))° • Now \(Int(current))°"
+        let target = boilerSetpoint(from: device.attributes)
+        let current = boilerCurrentTemperature(from: device.attributes) ?? (Double(device.state) ?? Double(device.state) ?? nil)
+        if let t = target, let c = current {
+            return "Target \(Int(t))° • Now \(Int(c))°"
         }
-        if let target { return "Target \(Int(target))°" }
-        return state
+        if let t = target {
+            return "Target \(Int(t))°"
+        }
+        if let c = current {
+            return "Now \(Int(c))°"
+        }
+        return state.isEmpty ? "Boiler" : state
     case "Blind":
+        if let pos = blindPositionPercent(for: device) {
+            return "Position \(pos)%"
+        }
+        let s = state.lowercased()
+        if s == "stop" || s == "stopped" { return "" }
         return state.isEmpty ? "Idle" : state.capitalized
     case "Motion Sensor":
         let active = ["on", "motion", "detected", "open"].contains(state.lowercased())
@@ -58,6 +84,8 @@ func primaryAction(for label: String, device: UIDevice) -> DeviceCommand? {
         return .tvTogglePower
     case "Speaker":
         return .speakerTogglePower
+    case "Boiler":
+        return nil // handled via inline +/– controls
     default:
         return nil
     }
@@ -89,4 +117,30 @@ func volumePercent(for device: UIDevice) -> Double {
         return level * 100
     }
     return 0
+}
+
+// MARK: - Boiler helpers
+
+func boilerSetpoint(from attrs: [String: CodableValue]) -> Double? {
+    let keys = ["temperature", "target_temperature", "target_temp", "target_temp_low", "target_temp_high"]
+    for key in keys {
+        if let val = attrs[key]?.anyValue {
+            if let d = val as? Double { return d }
+            if let i = val as? Int { return Double(i) }
+            if let s = val as? String, let d = Double(s) { return d }
+        }
+    }
+    return nil
+}
+
+func boilerCurrentTemperature(from attrs: [String: CodableValue]) -> Double? {
+    let keys = ["current_temperature", "temperature", "temp"]
+    for key in keys {
+        if let val = attrs[key]?.anyValue {
+            if let d = val as? Double { return d }
+            if let i = val as? Int { return Double(i) }
+            if let s = val as? String, let d = Double(s) { return d }
+        }
+    }
+    return nil
 }

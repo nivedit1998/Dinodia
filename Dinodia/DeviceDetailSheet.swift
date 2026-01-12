@@ -3,6 +3,7 @@ import Combine
 
 struct DeviceDetailSheet: View {
     @EnvironmentObject private var session: SessionStore
+    @EnvironmentObject private var router: TabRouter
     @Environment(\.dismiss) private var dismiss
 
     let device: UIDevice
@@ -10,21 +11,30 @@ struct DeviceDetailSheet: View {
     let linkedSensors: [UIDevice]
     let relatedDevices: [UIDevice]?
     let allowSensorHistory: Bool
+    let showControls: Bool
+    let showStateText: Bool
+    var onDeviceUpdated: (() -> Void)?
 
     @State private var isSending = false
     @State private var alertMessage: String?
-    @State private var selectedSensorId: String?
-    @State private var selectedBucket: HistoryBucket = .daily
-    @State private var historyPoints: [HistoryPoint] = []
-    @State private var historyUnit: String?
-    @State private var historyLoading = false
-    @State private var historyError: String?
+    @State private var sensorHistory: [String: SensorHistoryState] = [:]
     @State private var brightnessValue: Double = 0
+    @State private var blindPositionValue: Double = 0
+    @State private var boilerTargetValue: Double = 0
+    @State private var isAdjustingBoilerTarget: Bool = false
     @State private var cameraRefresh = Date()
+    @State private var showEditSheet = false
+    @State private var editName: String = ""
+    @State private var editTravel: String = ""
+    @State private var isSavingEdit = false
+    @State private var editError: String?
 
-    private var selectedSensor: UIDevice? {
-        guard let id = selectedSensorId else { return nil }
-        return linkedSensors.first { $0.entityId == id }
+    private var canShowSensorHistory: Bool {
+        allowSensorHistory && session.user?.role == .ADMIN
+    }
+
+    private var canControlDevices: Bool {
+        session.user?.role == .TENANT
     }
 
     var body: some View {
@@ -32,7 +42,9 @@ struct DeviceDetailSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     header
-                    controls
+                    if showControls {
+                        controls
+                    }
                     if !linkedSensors.isEmpty {
                         sensorSection
                     }
@@ -45,6 +57,26 @@ struct DeviceDetailSheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
                 }
+                ToolbarItem(placement: .primaryAction) {
+                    if session.user?.role == .ADMIN {
+                        Menu {
+                            Button("Rename") {
+                                editName = device.name
+                                editTravel = device.blindTravelSeconds != nil ? "\(Int(device.blindTravelSeconds ?? 0))" : ""
+                                showEditSheet = true
+                            }
+                            if getPrimaryLabel(for: device) == "Blind" {
+                                Button("Set travel time") {
+                                    editName = device.name
+                                    editTravel = device.blindTravelSeconds != nil ? "\(Int(device.blindTravelSeconds ?? 0))" : ""
+                                    showEditSheet = true
+                                }
+                            }
+                        } label: {
+                          Image(systemName: "ellipsis.circle")
+                        }
+                    }
+                }
             }
             .alert("Dinodia", isPresented: Binding(get: { alertMessage != nil }, set: { _ in alertMessage = nil })) {
                 Button("OK", role: .cancel) {}
@@ -53,21 +85,52 @@ struct DeviceDetailSheet: View {
             }
             .onAppear {
                 brightnessValue = Double(brightnessPercent(for: device) ?? 0)
-                if selectedSensorId == nil {
-                    selectedSensorId = linkedSensors.first?.entityId
-                }
-                if allowSensorHistory {
-                    Task { await loadHistory() }
-                }
+                blindPositionValue = Double(blindPositionPercent(for: device) ?? 0)
+                let initialBoiler = boilerSetpoint(from: device.attributes) ?? 20
+                boilerTargetValue = Double(initialBoiler)
+                linkedSensors.forEach { ensureHistoryState(for: $0) }
             }
-            .onChange(of: selectedSensorId) { _, _ in
-                Task { await loadHistory() }
+            .onChange(of: linkedSensors.map(\.entityId)) { _, _ in
+                linkedSensors.forEach { ensureHistoryState(for: $0) }
             }
-            .onChange(of: selectedBucket) { _, _ in
-                Task { await loadHistory() }
+            .onChange(of: device.attributes) { _, newAttrs in
+                if !isAdjustingBoilerTarget {
+                    let next = boilerSetpoint(from: newAttrs) ?? boilerTargetValue
+                    boilerTargetValue = Double(next)
+                }
             }
             .onReceive(Timer.publish(every: 15, on: .main, in: .common).autoconnect()) { _ in
                 cameraRefresh = Date()
+            }
+            .sheet(isPresented: $showEditSheet) {
+                NavigationStack {
+                    Form {
+                        Section("Display name") {
+                            TextField("Device name", text: $editName)
+                        }
+                        if getPrimaryLabel(for: device) == "Blind" {
+                            Section("Blind travel time (seconds)") {
+                                TextField("Leave empty for default", text: $editTravel)
+                                    .keyboardType(.numberPad)
+                                if let err = editError {
+                                    Text(err).foregroundColor(.red)
+                                }
+                            }
+                        }
+                    }
+                    .navigationTitle("Edit device")
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cancel") { showEditSheet = false }
+                        }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button(isSavingEdit ? "Saving…" : "Save") {
+                                Task { await saveEdit() }
+                            }
+                            .disabled(isSavingEdit)
+                        }
+                    }
+                }
             }
         }
     }
@@ -81,11 +144,19 @@ struct DeviceDetailSheet: View {
             Text(device.name)
                 .font(.title2)
                 .fontWeight(.bold)
-            Text(device.areaName ?? "Unassigned area")
-                .foregroundColor(.secondary)
-            Text("State: \(device.state)")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
+            HStack {
+                Text(device.areaName ?? "Unassigned area")
+                    .foregroundColor(.secondary)
+                Spacer()
+                Label(haMode == .cloud ? "Cloud Mode" : "Home Mode", systemImage: "bolt.horizontal.circle")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+            }
+            if showStateText {
+                Text("State: \(device.state)")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
@@ -96,6 +167,8 @@ struct DeviceDetailSheet: View {
     @ViewBuilder
     private var controls: some View {
         let label = getPrimaryLabel(for: device)
+        let allowControl = canControlDevices
+        let controlDisabled = isSending || !allowControl
         switch label {
         case "Light":
             VStack(alignment: .leading, spacing: 16) {
@@ -105,7 +178,7 @@ struct DeviceDetailSheet: View {
                         .padding()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(isSending)
+                .disabled(controlDisabled)
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Brightness \(Int(brightnessValue))%")
                         .font(.footnote)
@@ -116,15 +189,85 @@ struct DeviceDetailSheet: View {
                             Task { await send(.lightSetBrightness, value: value) }
                         }
                     }
+                    .disabled(controlDisabled)
                 }
             }
         case "Blind":
-            HStack(spacing: 12) {
-                Button("Open") { Task { await send(.blindOpen) } }
-                Button("Close") { Task { await send(.blindClose) } }
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    Button("Open") { Task { await send(.blindOpen) } }
+                    Button("Close") { Task { await send(.blindClose) } }
+                }
+                .buttonStyle(.bordered)
+                .disabled(controlDisabled)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Position \(Int(blindPositionValue))%")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                    Slider(value: $blindPositionValue, in: 0...100, step: 1) { editing in
+                        if !editing {
+                            let value = blindPositionValue
+                            Task { await send(.blindSetPosition, value: value) }
+                        }
+                    }
+                    .disabled(controlDisabled)
+                }
             }
-            .buttonStyle(.bordered)
-            .disabled(isSending)
+        case "Boiler":
+            VStack(alignment: .leading, spacing: 12) {
+                let target = boilerSetpoint(from: device.attributes)
+                let currentTemp = boilerCurrentTemperature(from: device.attributes)
+                if let currentTemp {
+                    Text("Now \(Int(currentTemp))°")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                }
+                HStack {
+                    Button {
+                        Task { await send(.boilerTempDown) }
+                    } label: {
+                        Label("Temp", systemImage: "minus")
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(controlDisabled)
+                    if let target {
+                        VStack(spacing: 2) {
+                            Text("Target")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("\(Int(target))°")
+                                .font(.title3)
+                                .fontWeight(.semibold)
+                                .frame(minWidth: 50)
+                        }
+                        .frame(minWidth: 70)
+                    }
+                    Button {
+                        Task { await send(.boilerTempUp) }
+                    } label: {
+                        Label("Temp", systemImage: "plus")
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(controlDisabled)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Set temperature \(Int(boilerTargetValue))°")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                    Slider(value: $boilerTargetValue, in: 10...35, step: 1) { editing in
+                        isAdjustingBoilerTarget = editing
+                        if !editing {
+                            let value = boilerTargetValue
+                            Task { await send(.boilerSetTemperature, value: value) }
+                        }
+                    }
+                    .disabled(controlDisabled)
+                }
+            }
         case "Spotify":
             VStack(spacing: 12) {
                 HStack {
@@ -133,7 +276,13 @@ struct DeviceDetailSheet: View {
                     Button(action: { Task { await send(.mediaNext) } }) { Text("Next") }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(isSending)
+                .disabled(controlDisabled)
+                HStack {
+                    Button("Vol -") { Task { await send(.mediaVolumeDown) } }
+                    Button("Vol +") { Task { await send(.mediaVolumeUp) } }
+                }
+                .buttonStyle(.bordered)
+                .disabled(controlDisabled)
             }
         case "TV", "Speaker":
             VStack(spacing: 12) {
@@ -143,13 +292,13 @@ struct DeviceDetailSheet: View {
                         .padding()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(isSending)
+                .disabled(controlDisabled)
                 HStack {
                     Button("Vol -") { Task { await send(.mediaVolumeDown) } }
                     Button("Vol +") { Task { await send(.mediaVolumeUp) } }
                 }
                 .buttonStyle(.bordered)
-                .disabled(isSending)
+                .disabled(controlDisabled)
             }
         case "Doorbell":
             cameraView(for: device)
@@ -175,155 +324,164 @@ struct DeviceDetailSheet: View {
 
     @ViewBuilder
     private func cameraView(for device: UIDevice) -> some View {
-        if let ha = session.connection(for: haMode), let url = cameraURL(for: device.entityId, ha: ha) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Live View")
-                    .font(.headline)
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFit()
-                            .cornerRadius(16)
-                    case .failure:
-                        Text("Unable to load camera")
-                            .foregroundColor(.secondary)
-                    default:
-                        ProgressView()
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .cornerRadius(16)
-            }
-        } else {
-            Text("Camera view unavailable")
-                .foregroundColor(.secondary)
-        }
+        Text("Camera view is not available in this app yet.")
+            .foregroundColor(.secondary)
     }
 
     @ViewBuilder
     private var securityCameraGrid: some View {
-        if let cameras = relatedDevices, !cameras.isEmpty, let ha = session.connection(for: haMode) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Cameras")
-                    .font(.headline)
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                    ForEach(cameras, id: \.entityId) { cam in
-                        VStack(alignment: .leading, spacing: 8) {
-                            if let url = cameraURL(for: cam.entityId, ha: ha) {
-                                AsyncImage(url: url) { phase in
-                                    switch phase {
-                                    case .success(let image):
-                                        image
-                                            .resizable()
-                                            .scaledToFill()
-                                            .frame(height: 120)
-                                            .clipped()
-                                            .cornerRadius(12)
-                                    case .failure:
-                                        Text("Unavailable")
-                                            .frame(maxWidth: .infinity, minHeight: 120)
-                                            .background(Color(.tertiarySystemBackground))
-                                            .cornerRadius(12)
-                                    default:
-                                        ProgressView()
-                                            .frame(maxWidth: .infinity, minHeight: 120)
-                                    }
-                                }
-                            }
-                            Text(cam.name)
-                                .font(.caption)
-                                .lineLimit(1)
-                        }
-                    }
-                }
-            }
-        }
+        Text("Camera tiles are not available in this app yet.")
+            .foregroundColor(.secondary)
     }
 
     private var sensorSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Linked Sensors")
                 .font(.headline)
-            if allowSensorHistory {
-                sensorHistoryControls
-                historyContent
-            } else {
-                ForEach(linkedSensors, id: \.entityId) { sensor in
-                    VStack(alignment: .leading) {
-                        Text(sensor.name)
-                            .font(.subheadline)
-                        Text(sensor.state)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+            ForEach(linkedSensors, id: \.entityId) { sensor in
+                let state = sensorHistory[sensor.entityId] ?? SensorHistoryState()
+                VStack(alignment: .leading, spacing: 8) {
+                    Button {
+                        if canShowSensorHistory {
+                            toggleHistory(for: sensor)
+                        }
+                    } label: {
+                        HStack(alignment: .center, spacing: 12) {
+                            Circle()
+                                .fill(Color.accentColor.opacity(0.2))
+                                .frame(width: 10, height: 10)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(sensor.name)
+                                    .font(.subheadline)
+                                Text(formatSensorValue(sensor))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            if canShowSensorHistory {
+                                HStack(spacing: 6) {
+                                    if state.loading {
+                                        ProgressView()
+                                            .scaleEffect(0.6)
+                                    }
+                                    Text(state.expanded ? "Hide" : "History")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
-                    .background(Color(.tertiarySystemBackground))
-                    .cornerRadius(12)
+                    .buttonStyle(.plain)
+
+                    if canShowSensorHistory, state.expanded {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                ForEach(HistoryBucket.allCases, id: \.self) { bucket in
+                                    let selected = state.bucket == bucket
+                                    Button(bucketLabel(bucket)) {
+                                        changeBucket(for: sensor, bucket: bucket)
+                                    }
+                                    .font(.caption)
+                                    .padding(.vertical, 6)
+                                    .padding(.horizontal, 12)
+                                    .background(selected ? Color.accentColor.opacity(0.2) : Color(.tertiarySystemBackground))
+                                    .cornerRadius(999)
+                                }
+                            }
+                            historyContent(for: sensor, state: state)
+                        }
+                        .padding()
+                        .background(Color(.tertiarySystemBackground))
+                        .cornerRadius(12)
+                    }
                 }
             }
         }
     }
 
-    private var sensorHistoryControls: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if linkedSensors.count > 1 {
-                Picker("Sensor", selection: Binding(
-                    get: { selectedSensorId ?? linkedSensors.first?.entityId ?? "" },
-                    set: { selectedSensorId = $0 }
-                )) {
-                    ForEach(linkedSensors, id: \.entityId) { sensor in
-                        Text(sensor.name).tag(sensor.entityId)
-                    }
+    private func cameraURL(for entityId: String, ha: HaConnectionLike) -> URL? {
+        let ts = cameraRefresh.timeIntervalSince1970
+        guard let encodedEntity = entityId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else { return nil }
+        let urlString = "\(ha.baseUrl)/api/camera_proxy/\(encodedEntity)?ts=\(ts)"
+        return URL(string: urlString)
+    }
+
+    // MARK: - Bearer-backed image loader (avoids tokens in query strings)
+
+    private struct BearerImage: View {
+        let url: URL
+        let token: String
+        let cacheBust: Date
+
+        @State private var phase: Phase = .loading
+
+        private enum Phase {
+            case loading
+            case success(Image)
+            case failure
+        }
+
+        var body: some View {
+            Group {
+                switch phase {
+                case .loading:
+                    ProgressView()
+                case .success(let image):
+                    image
+                        .resizable()
+                        .scaledToFill()
+                        .clipped()
+                case .failure:
+                    Text("Unavailable")
+                        .frame(maxWidth: .infinity, minHeight: 120)
+                        .background(Color(.tertiarySystemBackground))
+                        .foregroundColor(.secondary)
                 }
-                .pickerStyle(.menu)
             }
-            HStack {
-                ForEach(HistoryBucket.allCases, id: \.self) { bucket in
-                    Button(bucketLabel(bucket)) { selectedBucket = bucket }
-                        .font(.caption)
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 12)
-                        .background(selectedBucket == bucket ? Color.accentColor.opacity(0.2) : Color(.tertiarySystemBackground))
-                        .cornerRadius(999)
+            .task(id: cacheBust) {
+                await load()
+            }
+        }
+
+        private func load() async {
+            guard let request = makeRequest() else {
+                phase = .failure
+                return
+            }
+            let config = URLSessionConfiguration.ephemeral
+            config.requestCachePolicy = .reloadIgnoringLocalCacheData
+            let session = URLSession(configuration: config)
+            do {
+                let (data, response) = try await session.data(for: request)
+                guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
+                      let image = UIImage(data: data) else {
+                    phase = .failure
+                    return
                 }
+                phase = .success(Image(uiImage: image))
+            } catch {
+                phase = .failure
             }
+        }
+
+        private func makeRequest() -> URLRequest? {
+            var request = URLRequest(url: url)
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            request.timeoutInterval = 5
+            return request
         }
     }
 
-    @ViewBuilder
-    private var historyContent: some View {
-        if historyLoading {
-            ProgressView("Loading history…")
-        } else if let error = historyError {
-            Text(error)
-                .foregroundColor(.secondary)
-                .font(.caption)
-        } else if historyPoints.isEmpty {
-            Text("No history yet.")
-                .foregroundColor(.secondary)
-                .font(.caption)
-        } else {
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(historyPoints) { point in
-                    HStack {
-                        Text(point.label)
-                            .font(.footnote)
-                        Spacer()
-                        Text("\(String(format: "%.2f", point.value))\(historyUnit.map { " \($0)" } ?? "")")
-                            .font(.footnote)
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.vertical, 4)
-                    Divider()
-                }
-            }
-            .padding()
-            .background(Color(.tertiarySystemBackground))
-            .cornerRadius(12)
-        }
+    private func formatSensorValue(_ sensor: UIDevice) -> String {
+        let state = sensor.state.trimmingCharacters(in: .whitespacesAndNewlines)
+        let unit = sensor.attributes["unit_of_measurement"]?.anyValue as? String ?? ""
+        if state.isEmpty { return "—" }
+        if state.lowercased() == "unavailable" { return "Unavailable" }
+        if !unit.isEmpty { return "\(state) \(unit)".trimmingCharacters(in: .whitespaces) }
+        return state.prefix(1).uppercased() + state.dropFirst()
     }
 
     private func bucketLabel(_ bucket: HistoryBucket) -> String {
@@ -334,49 +492,167 @@ struct DeviceDetailSheet: View {
         }
     }
 
-    private func cameraURL(for entityId: String, ha: HaConnectionLike) -> URL? {
-        let ts = cameraRefresh.timeIntervalSince1970
-        guard let encodedEntity = entityId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
-              let encodedToken = ha.longLivedToken.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return nil }
-        let urlString = "\(ha.baseUrl)/api/camera_proxy/\(encodedEntity)?token=\(encodedToken)&ts=\(ts)"
-        return URL(string: urlString)
+    private func ensureHistoryState(for sensor: UIDevice) {
+        guard sensorHistory[sensor.entityId] == nil else { return }
+        sensorHistory[sensor.entityId] = SensorHistoryState()
     }
 
-    private func loadHistory() async {
-        guard allowSensorHistory, let sensor = selectedSensor, let userId = session.user?.id else { return }
-        historyLoading = true
-        historyError = nil
+    private func toggleHistory(for sensor: UIDevice) {
+        ensureHistoryState(for: sensor)
+        let id = sensor.entityId
+        let isExpanding = !(sensorHistory[id]?.expanded ?? false)
+        sensorHistory[id]?.expanded.toggle()
+        if isExpanding && (sensorHistory[id]?.points == nil) {
+            Task { await loadHistory(for: sensor, bucket: sensorHistory[id]?.bucket ?? .daily) }
+        }
+    }
+
+    private func changeBucket(for sensor: UIDevice, bucket: HistoryBucket) {
+        ensureHistoryState(for: sensor)
+        let id = sensor.entityId
+        sensorHistory[id]?.bucket = bucket
+        Task { await loadHistory(for: sensor, bucket: bucket) }
+    }
+
+    @ViewBuilder
+    private func historyContent(for sensor: UIDevice, state: SensorHistoryState) -> some View {
+        if state.loading {
+            ProgressView("Loading history…")
+        } else if let error = state.error {
+            Text(error)
+                .foregroundColor(.secondary)
+                .font(.caption)
+        } else if let points = state.points, points.isEmpty {
+            Text("No history yet.")
+                .foregroundColor(.secondary)
+                .font(.caption)
+        } else if let points = state.points {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(points) { point in
+                    HStack {
+                        Text(point.label)
+                            .font(.footnote)
+                        Spacer()
+                        Text("\(String(format: "%.2f", point.value))\(state.unit.map { " \($0)" } ?? "")")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                    Divider()
+                }
+            }
+        }
+    }
+
+    private func loadHistory(for sensor: UIDevice, bucket: HistoryBucket) async {
+        guard canShowSensorHistory, session.user != nil else { return }
+        ensureHistoryState(for: sensor)
+        let id = sensor.entityId
+        await MainActor.run {
+            sensorHistory[id]?.loading = true
+            sensorHistory[id]?.error = nil
+        }
         do {
-            let result = try await MonitoringHistoryService.fetchHistory(userId: userId, entityId: sensor.entityId, bucket: selectedBucket)
+            let result = try await MonitoringHistoryService.fetchHistory(
+                entityId: sensor.entityId,
+                bucket: bucket,
+                role: session.user?.role
+            )
             await MainActor.run {
-                historyPoints = result.points
-                historyUnit = result.unit
-                historyLoading = false
+                sensorHistory[id]?.points = result.points
+                sensorHistory[id]?.unit = result.unit
+                sensorHistory[id]?.loading = false
+                sensorHistory[id]?.error = nil
             }
         } catch {
             await MainActor.run {
-                historyPoints = []
-                historyUnit = nil
-                historyError = error.localizedDescription
-                historyLoading = false
+                if error.isCancellation { return }
+                sensorHistory[id]?.points = []
+                sensorHistory[id]?.unit = nil
+                sensorHistory[id]?.loading = false
+                sensorHistory[id]?.error = MonitoringHistoryError.unableToLoad.errorDescription
             }
         }
     }
 
     private func send(_ command: DeviceCommand, value: Double? = nil) async {
-        guard !isSending else { return }
-        guard let ha = session.connection(for: haMode) else {
-            alertMessage = haMode == .cloud
-                ? "Dinodia Cloud is not ready yet. The homeowner needs to finish setting up remote access for this property."
-                : "We cannot find your Dinodia Hub on the home Wi-Fi. It looks like you are away from home—switch to Dinodia Cloud to control your place."
+        guard canControlDevices else {
+            alertMessage = "Device control is available to tenants only."
             return
         }
+        guard !isSending else { return }
         isSending = true
         defer { isSending = false }
         do {
-            try await HACommandHandler.handle(ha: ha, entityId: device.entityId, command: command, value: value)
+            if haMode == .cloud {
+                try await DeviceControlService.sendCloudCommand(
+                    entityId: device.entityId,
+                    command: command.rawValue,
+                    value: value
+                )
+            } else {
+                guard let ha = session.connection(for: .home) else {
+                    alertMessage = "We cannot find your Dinodia Hub on the home Wi‑Fi. Switch to Dinodia Cloud to control your place."
+                    return
+                }
+                try await HACommandHandler.handle(
+                    ha: ha,
+                    entityId: device.entityId,
+                    command: command,
+                    value: value,
+                    blindTravelSeconds: device.blindTravelSeconds
+                )
+            }
         } catch {
+            if error.isCancellation { return }
             alertMessage = error.localizedDescription
         }
     }
+
+    private func saveEdit() async {
+        guard session.user?.role == .ADMIN else { return }
+        isSavingEdit = true
+        editError = nil
+        defer { isSavingEdit = false }
+
+        let trimmedName = editName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedName.isEmpty {
+            editError = "Name is required."
+            return
+        }
+
+        var travelSeconds: Double? = nil
+        let trimmedTravel = editTravel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedTravel.isEmpty {
+            if let parsed = Double(trimmedTravel), parsed > 0 {
+                travelSeconds = parsed
+            } else {
+                editError = "Enter a positive number of seconds."
+                return
+            }
+        }
+
+        do {
+            try await DeviceAdminService.updateDevice(
+                entityId: device.entityId,
+                name: trimmedName,
+                blindTravelSeconds: getPrimaryLabel(for: device) == "Blind" ? travelSeconds : nil
+            )
+            showEditSheet = false
+            onDeviceUpdated?()
+        } catch {
+            if error.isCancellation { return }
+            editError = error.localizedDescription
+        }
+    }
+
+}
+
+private struct SensorHistoryState {
+    var expanded: Bool = false
+    var bucket: HistoryBucket = .daily
+    var loading: Bool = false
+    var error: String?
+    var unit: String?
+    var points: [HistoryPoint]?
 }

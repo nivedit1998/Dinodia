@@ -6,8 +6,14 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		37A3E5E22EF0B5E500A1C0D1 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 37A3E5E12EF0B5E500A1C0D1 /* LaunchScreen.storyboard */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		375DA8482EEE0126006E0DF2 /* Dinodia.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Dinodia.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		37A3E5E12EF0B5E500A1C0D1 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
+		37A3E5E32EF0B63E00A1C0D1 /* Dinodia/PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = file.xcprivacy; path = Dinodia/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -32,6 +38,8 @@
 		375DA83F2EEE0126006E0DF2 = {
 			isa = PBXGroup;
 			children = (
+				37A3E5E12EF0B5E500A1C0D1 /* LaunchScreen.storyboard */,
+				37A3E5E32EF0B63E00A1C0D1 /* Dinodia/PrivacyInfo.xcprivacy */,
 				375DA84A2EEE0126006E0DF2 /* Dinodia */,
 				375DA8492EEE0126006E0DF2 /* Products */,
 			);
@@ -109,6 +117,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				37A3E5E22EF0B5E500A1C0D1 /* LaunchScreen.storyboard in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -164,6 +173,7 @@
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				EXCLUDED_SOURCE_FILE_NAMES = SECURITY_CHECKLIST.md;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -228,6 +238,7 @@
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				EXCLUDED_SOURCE_FILE_NAMES = SECURITY_CHECKLIST.md;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -255,6 +266,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = P759CSZK34;
 				ENABLE_PREVIEWS = YES;
+				EXCLUDED_SOURCE_FILE_NAMES = SECURITY_CHECKLIST.md;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
@@ -284,6 +296,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = P759CSZK34;
 				ENABLE_PREVIEWS = YES;
+				EXCLUDED_SOURCE_FILE_NAMES = SECURITY_CHECKLIST.md;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.6;

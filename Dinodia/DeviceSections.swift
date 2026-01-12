@@ -39,7 +39,7 @@ struct DeviceDimension {
 
 func getDeviceLayoutSize(_ device: UIDevice) -> DeviceLayoutSize {
     let label = getPrimaryLabel(for: device)
-    if label == "Spotify" { return .medium }
+    if label == "Spotify" || label == "Boiler" { return .medium }
     return .small
 }
 

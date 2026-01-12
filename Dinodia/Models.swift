@@ -36,12 +36,13 @@ struct UserWithRelations {
 
 struct HaConnection: Codable {
     let id: Int
-    let baseUrl: String
+    let baseUrl: String?
     let cloudUrl: String?
-    let haUsername: String
-    let haPassword: String
-    let longLivedToken: String
-    let ownerId: Int
+    let haUsername: String?
+    let haPassword: String?
+    let longLivedToken: String?
+    let ownerId: Int?
+    let cloudEnabled: Bool?
 }
 
 struct HaConnectionLike {
@@ -50,8 +51,8 @@ struct HaConnectionLike {
 }
 
 struct AccessRule: Codable {
-    let id: Int
-    let userId: Int
+    let id: Int?
+    let userId: Int?
     let area: String
 }
 
@@ -68,6 +69,7 @@ struct UIDevice: Codable, Identifiable {
     let labels: [String]?
     let domain: String
     let attributes: [String: CodableValue]
+    let blindTravelSeconds: Double?
 }
 
 struct DeviceOverride: Codable {

@@ -2,107 +2,120 @@ import SwiftUI
 
 struct AdminSettingsView: View {
     @EnvironmentObject private var session: SessionStore
-    @State private var currentPassword = ""
-    @State private var newPassword = ""
-    @State private var confirmNewPassword = ""
-
-    @State private var haUsername: String = ""
-    @State private var haBaseUrl: String = ""
-    @State private var haCloudUrl: String = ""
-    @State private var haPassword: String = ""
-    @State private var haToken: String = ""
-
-    @State private var isSavingPassword = false
-    @State private var isSavingHa = false
     @State private var alertMessage: String?
+    @State private var showingReachabilityAlert = false
+    @State private var reachabilityMessage: String = ""
+    @State private var reachabilitySuccess = false
+    @State private var navigateToRemoteAccess = false
 
     var body: some View {
         Form {
             Section("Account") {
                 Text("Logged in as \(session.user?.username ?? "")")
+                if session.haMode == .cloud {
+                    cloudBadge
+                } else {
+                    homeBadge
+                }
                 Button(role: .destructive) {
                     session.logout()
                 } label: {
                     Text("Logout")
                 }
             }
-
-            Section("Change Password") {
-                SecureField("Current password", text: $currentPassword)
-                SecureField("New password", text: $newPassword)
-                SecureField("Confirm new password", text: $confirmNewPassword)
-                Button("Update password") {
-                    Task { await updatePassword() }
+            Section("Security") {
+                NavigationLink("Manage Devices") { ManageDevicesView() }
+                Button(action: {
+                    handleRemoteAccessTap()
+                }) {
+                    Text("Remote Access Setup")
+                        .foregroundColor(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .disabled(isSavingPassword)
-            }
-
-            Section("Dinodia Hub") {
-                TextField("HA username", text: $haUsername)
-                TextField("Dinodia Hub URL (home Wi-Fi)", text: $haBaseUrl)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                TextField("Dinodia Cloud URL (Nabu Casa)", text: $haCloudUrl)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                SecureField("New Dinodia Hub password (optional)", text: $haPassword)
-                SecureField("New Dinodia Hub long-lived token (optional)", text: $haToken)
-                Button("Update Dinodia Hub settings") {
-                    Task { await updateHaSettings() }
-                }
-                .disabled(isSavingHa)
             }
         }
         .navigationTitle("Settings")
-        .onAppear { loadInitialValues() }
+        .navigationBarTitleDisplayMode(.inline)
         .alert("Dinodia", isPresented: Binding(get: { alertMessage != nil }, set: { _ in alertMessage = nil })) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(alertMessage ?? "")
         }
-    }
-
-    private func loadInitialValues() {
-        guard let connection = session.haConnection else { return }
-        haUsername = connection.haUsername
-        haBaseUrl = connection.baseUrl
-        haCloudUrl = connection.cloudUrl ?? ""
-    }
-
-    private func updatePassword() async {
-        guard let role = session.user?.role else { return }
-        isSavingPassword = true
-        defer { isSavingPassword = false }
-        do {
-            try await AuthService.changePassword(role: role, currentPassword: currentPassword, newPassword: newPassword, confirmPassword: confirmNewPassword)
-            alertMessage = "Password updated."
-            currentPassword = ""
-            newPassword = ""
-            confirmNewPassword = ""
-        } catch {
-            alertMessage = error.localizedDescription
+        .alert("Remote Access Setup", isPresented: $showingReachabilityAlert) {
+            if reachabilitySuccess {
+                Button("Continue") { navigateToRemoteAccess = true }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            HStack {
+                Image(systemName: reachabilitySuccess ? "checkmark.circle.fill" : "xmark.octagon.fill")
+                    .foregroundColor(reachabilitySuccess ? .green : .red)
+                Text(reachabilityMessage)
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                ModeSwitchPrompt(
+                    targetMode: session.haMode == .home ? .cloud : .home,
+                    userId: session.user?.id,
+                    onSwitched: nil
+                )
+                .environmentObject(session)
+            }
+            ToolbarItem(placement: .principal) {
+                DinodiaNavBarLogo()
+            }
+        }
+        .navigationDestination(isPresented: $navigateToRemoteAccess) {
+            RemoteAccessWizardView().environmentObject(session)
         }
     }
 
-    private func updateHaSettings() async {
-        guard let user = session.user else { return }
-        isSavingHa = true
-        defer { isSavingHa = false }
-        do {
-            let updated = try await DinodiaService.updateHaSettings(.init(
-                adminId: user.id,
-                haUsername: haUsername,
-                haBaseUrl: haBaseUrl,
-                haCloudUrl: haCloudUrl,
-                haPassword: haPassword.isEmpty ? nil : haPassword,
-                haLongLivedToken: haToken.isEmpty ? nil : haToken
-            ))
-            session.updateConnection(updated)
-            alertMessage = "Dinodia Hub settings updated."
-            haPassword = ""
-            haToken = ""
-        } catch {
-            alertMessage = error.localizedDescription
+    private var cloudBadge: some View {
+        HStack(spacing: 4) {
+            Image(systemName: session.cloudAvailable ? "cloud.fill" : "cloud.slash.fill")
+                .foregroundColor(session.cloudAvailable ? .green : .orange)
+            Text(session.cloudAvailable ? "Cloud Available" : "Cloud Unavailable")
+                .font(.caption2)
+                .foregroundColor(.secondary)
         }
+    }
+
+    private var homeBadge: some View {
+        HStack(spacing: 4) {
+            Image(systemName: session.onHomeNetwork ? "wifi" : "wifi.slash")
+                .foregroundColor(session.onHomeNetwork ? .green : .orange)
+            Text(homeNetworkText)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private var homeNetworkText: String {
+        if session.homeHubStatus == .reachable {
+            return "On Home Network"
+        } else if session.homeHubStatus == .unreachable {
+            return "Not on Home Network"
+        }
+        return session.onHomeNetwork ? "On Home Network" : "Not on Home Network"
+    }
+
+    private func confirmHomeReachable() async {
+        let reachable = await RemoteAccessService.checkHomeReachable()
+        await MainActor.run {
+            reachabilitySuccess = reachable
+            reachabilityMessage = reachable
+                ? "Dinodia Hub is reachable on your home Wi‑Fi. Opening Remote Access Setup."
+                : "You must be on your Home Wi‑Fi to enable remote access."
+            showingReachabilityAlert = true
+        }
+    }
+
+    private func handleRemoteAccessTap() {
+        guard session.haMode == .home, session.onHomeNetwork else {
+            alertMessage = "You can only enable Remote Access when on Home Wi‑Fi."
+            return
+        }
+        Task { await confirmHomeReachable() }
     }
 }

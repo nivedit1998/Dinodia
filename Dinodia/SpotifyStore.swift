@@ -24,7 +24,6 @@ final class SpotifyStore: NSObject, ObservableObject, ASWebAuthenticationPresent
     private var playbackTimer: Timer?
     private var currentCodeVerifier: String?
     private var currentState: String?
-
     override init() {
         super.init()
         tokens = SpotifyTokenStore.load()
@@ -61,7 +60,10 @@ final class SpotifyStore: NSObject, ObservableObject, ASWebAuthenticationPresent
             Task { @MainActor in
                 guard let self else { return }
                 self.isLoggingIn = false
-                if let error { self.errorMessage = error.localizedDescription; return }
+                if let error {
+                    if error.isCancellation { return }
+                    self.errorMessage = error.localizedDescription; return
+                }
                 guard let callbackURL = callbackURL, let code = self.extractCode(from: callbackURL) else {
                     self.errorMessage = "Spotify login was cancelled or failed."
                     return
@@ -81,6 +83,7 @@ final class SpotifyStore: NSObject, ObservableObject, ASWebAuthenticationPresent
         playback = nil
         isLoggedIn = false
         devices = []
+        errorMessage = nil
         stopTimer()
         Task { @MainActor in
             isLoggingOut = false
@@ -97,10 +100,13 @@ final class SpotifyStore: NSObject, ObservableObject, ASWebAuthenticationPresent
             isLoadingPlayback = false
         } catch {
             isLoadingPlayback = false
-            errorMessage = error.localizedDescription
-            if (error as NSError).code == 401 {
-                tokens = nil
-                isLoggedIn = false
+            if error.isCancellation { return }
+            if shouldForceLogout(for: error) {
+                logout()
+                // Optional: show a single message; the timer is stopped so it won't spam.
+                errorMessage = "Spotify session expired. Please log in again."
+            } else {
+                errorMessage = error.localizedDescription
             }
         }
     }
@@ -115,6 +121,7 @@ final class SpotifyStore: NSObject, ObservableObject, ASWebAuthenticationPresent
             }
             await refreshPlayback()
         } catch {
+            if error.isCancellation { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -125,6 +132,7 @@ final class SpotifyStore: NSObject, ObservableObject, ASWebAuthenticationPresent
             try await SpotifyService.skipToNext(accessToken: token)
             await refreshPlayback()
         } catch {
+            if error.isCancellation { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -135,6 +143,7 @@ final class SpotifyStore: NSObject, ObservableObject, ASWebAuthenticationPresent
             try await SpotifyService.skipToPrevious(accessToken: token)
             await refreshPlayback()
         } catch {
+            if error.isCancellation { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -144,6 +153,7 @@ final class SpotifyStore: NSObject, ObservableObject, ASWebAuthenticationPresent
         do {
             devices = try await SpotifyService.getDevices(accessToken: token)
         } catch {
+            if error.isCancellation { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -155,6 +165,7 @@ final class SpotifyStore: NSObject, ObservableObject, ASWebAuthenticationPresent
             showDevicePicker = false
             await refreshPlayback()
         } catch {
+            if error.isCancellation { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -172,9 +183,17 @@ final class SpotifyStore: NSObject, ObservableObject, ASWebAuthenticationPresent
         let now = Date()
         if tokens.expiresAt.timeIntervalSince(now) < 60 {
             guard let refresh = tokens.refreshToken else { throw SpotifyServiceError.generic("Spotify session expired.") }
-            let refreshed = try await SpotifyService.refreshTokens(refreshToken: refresh)
-            self.tokens = refreshed
-            tokens = refreshed
+            do {
+                let refreshed = try await SpotifyService.refreshTokens(refreshToken: refresh)
+                self.tokens = refreshed
+                tokens = refreshed
+            } catch {
+                // If refresh token is revoked/invalid, force logout so we don't repeatedly alert.
+                if shouldForceLogout(for: error) {
+                    logout()
+                }
+                throw error
+            }
         }
         isLoggedIn = true
         return tokens.accessToken
@@ -195,6 +214,7 @@ final class SpotifyStore: NSObject, ObservableObject, ASWebAuthenticationPresent
         } catch {
             tokens = nil
             isLoggedIn = false
+            if error.isCancellation { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -227,5 +247,15 @@ final class SpotifyStore: NSObject, ObservableObject, ASWebAuthenticationPresent
         } else {
             isSpotifyInstalled = false
         }
+    }
+
+    private func shouldForceLogout(for error: Error) -> Bool {
+        // Spotify revocation errors come back as 400 with JSON body (invalid_grant / refresh token revoked).
+        let msg = error.localizedDescription.lowercased()
+        if msg.contains("invalid_grant") { return true }
+        if msg.contains("refresh token revoked") { return true }
+        if msg.contains("\"error\"") && msg.contains("invalid_grant") { return true }
+        if (error as NSError).code == 401 { return true }
+        return false
     }
 }

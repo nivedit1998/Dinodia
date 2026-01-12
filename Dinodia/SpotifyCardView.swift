@@ -1,14 +1,15 @@
 import SwiftUI
 
 struct SpotifyCardView: View {
-    @StateObject private var store = SpotifyStore()
+    @EnvironmentObject private var session: SessionStore
+    @EnvironmentObject private var spotifyStore: SpotifyStore
 
     var body: some View {
         VStack(spacing: 12) {
             HStack(alignment: .center, spacing: 12) {
                 artwork
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(store.playback?.trackName ?? (store.isLoggedIn ? "No track playing" : "Connect to Spotify"))
+                    Text(spotifyStore.playback?.trackName ?? (spotifyStore.isLoggedIn ? "No track playing" : "Connect to Spotify"))
                         .font(.headline)
                         .foregroundColor(.white)
                         .lineLimit(1)
@@ -16,9 +17,9 @@ struct SpotifyCardView: View {
                         .font(.subheadline)
                         .foregroundColor(.white.opacity(0.8))
                         .lineLimit(1)
-                    if store.isLoggedIn {
-                        Button(action: { store.showDevicePicker = true; Task { await store.loadDevices() } }) {
-                            Label(store.playback?.deviceName ?? "Device", systemImage: "speaker.wave.2.fill")
+                    if spotifyStore.isLoggedIn {
+                        Button(action: { spotifyStore.showDevicePicker = true; Task { await spotifyStore.loadDevices() } }) {
+                            Label(spotifyStore.playback?.deviceName ?? "Device", systemImage: "speaker.wave.2.fill")
                                 .font(.caption)
                                 .foregroundColor(.white)
                         }
@@ -28,12 +29,12 @@ struct SpotifyCardView: View {
                     }
                 }
                 Spacer()
-                if store.isLoggingIn || store.isLoadingPlayback {
+                if spotifyStore.isLoggingIn || spotifyStore.isLoadingPlayback {
                     ProgressView()
                         .tint(.white)
                 }
-                Button(action: { store.isLoggedIn ? store.openSpotifyApp() : store.startLogin() }) {
-                    Text(store.isLoggedIn ? "Open" : "Login")
+                Button(action: { spotifyStore.isLoggedIn ? spotifyStore.openSpotifyApp() : spotifyStore.startLogin() }) {
+                    Text(spotifyStore.isLoggedIn ? "Open" : "Login")
                         .fontWeight(.semibold)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 8)
@@ -43,17 +44,17 @@ struct SpotifyCardView: View {
                 .foregroundColor(.white)
             }
             HStack(spacing: 24) {
-                Button(action: { Task { await store.skipPrevious() } }) {
+                Button(action: { Task { await spotifyStore.skipPrevious() } }) {
                     Image(systemName: "backward.fill")
                 }
-                Button(action: { Task { await store.togglePlayPause() } }) {
-                    Image(systemName: store.playback?.isPlaying == true ? "pause.fill" : "play.fill")
+                Button(action: { Task { await spotifyStore.togglePlayPause() } }) {
+                    Image(systemName: spotifyStore.playback?.isPlaying == true ? "pause.fill" : "play.fill")
                         .padding()
                         .background(Color.white)
                         .foregroundColor(.black)
                         .clipShape(Circle())
                 }
-                Button(action: { Task { await store.skipNext() } }) {
+                Button(action: { Task { await spotifyStore.skipNext() } }) {
                     Image(systemName: "forward.fill")
                 }
             }
@@ -63,9 +64,9 @@ struct SpotifyCardView: View {
         .padding()
         .background(LinearGradient(colors: [Color.green.opacity(0.8), Color.black], startPoint: .topLeading, endPoint: .bottomTrailing))
         .cornerRadius(24)
-        .sheet(isPresented: $store.showDevicePicker) {
+        .sheet(isPresented: $spotifyStore.showDevicePicker) {
             NavigationStack {
-                List(store.devices) { device in
+                List(spotifyStore.devices) { device in
                     HStack {
                         VStack(alignment: .leading) {
                             Text(device.name)
@@ -81,31 +82,37 @@ struct SpotifyCardView: View {
                         }
                     }
                     .contentShape(Rectangle())
-                    .onTapGesture { Task { await store.transfer(to: device) } }
+                    .onTapGesture { Task { await spotifyStore.transfer(to: device) } }
                 }
                 .navigationTitle("Spotify Devices")
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Close") { store.showDevicePicker = false }
+                        Button("Close") { spotifyStore.showDevicePicker = false }
                     }
                 }
             }
         }
-        .alert("Spotify", isPresented: Binding(get: { store.errorMessage != nil }, set: { _ in store.errorMessage = nil })) {
+        .alert("Spotify", isPresented: Binding(get: { spotifyStore.errorMessage != nil }, set: { _ in spotifyStore.errorMessage = nil })) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(store.errorMessage ?? "")
+            Text(spotifyStore.errorMessage ?? "")
+        }
+        .onChange(of: session.user?.id) { _, newValue in
+            if newValue == nil {
+                spotifyStore.showDevicePicker = false
+                spotifyStore.errorMessage = nil
+            }
         }
     }
 
     private var subtitle: String {
-        if !store.isLoggedIn {
-            if !store.isSpotifyInstalled {
+        if !spotifyStore.isLoggedIn {
+            if !spotifyStore.isSpotifyInstalled {
                 return "Spotify app is not installed."
             }
             return "Log in to control music from this device."
         }
-        if let playback = store.playback {
+        if let playback = spotifyStore.playback {
             if let artist = playback.artistName, let album = playback.albumName {
                 return "\(artist) • \(album)"
             }
@@ -116,7 +123,7 @@ struct SpotifyCardView: View {
 
     private var artwork: some View {
         ZStack {
-            if let url = store.playback?.coverURL {
+            if let url = spotifyStore.playback?.coverURL {
                 AsyncImage(url: url) { image in
                     image.resizable()
                 } placeholder: {

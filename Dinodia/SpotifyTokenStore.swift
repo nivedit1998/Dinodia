@@ -34,6 +34,7 @@ enum KeychainHelper {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
         ]
         SecItemAdd(attributes as CFDictionary, nil)
     }

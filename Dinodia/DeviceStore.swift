@@ -6,7 +6,8 @@ struct DeviceCacheEntry: Codable {
     let updatedAt: Date
 }
 
-actor DeviceCache {
+@MainActor
+final class DeviceCache {
     static let shared = DeviceCache()
     private var memory: [String: DeviceCacheEntry] = [:]
 
@@ -77,11 +78,12 @@ final class DeviceStore: ObservableObject {
             self.lastUpdated = Date()
             self.errorMessage = nil
             let entry = DeviceCacheEntry(devices: fetched, updatedAt: Date())
-            await DeviceCache.shared.save(entry, for: cacheKey)
+            DeviceCache.shared.save(entry, for: cacheKey)
         } catch {
+            if error.isCancellation { return }
             errorMessage = error.localizedDescription
             if devices.isEmpty {
-                await DeviceCache.shared.save(DeviceCacheEntry(devices: [], updatedAt: Date()), for: cacheKey)
+                DeviceCache.shared.save(DeviceCacheEntry(devices: [], updatedAt: Date()), for: cacheKey)
             }
         }
     }
@@ -93,12 +95,12 @@ final class DeviceStore: ObservableObject {
     }
 
     private func loadCached() async {
-        if let memory = await DeviceCache.shared.entry(for: cacheKey) {
+        if let memory = DeviceCache.shared.entry(for: cacheKey) {
             devices = memory.devices
             lastUpdated = memory.updatedAt
             return
         }
-        if let disk = await DeviceCache.shared.loadFromDisk(for: cacheKey) {
+        if let disk = DeviceCache.shared.loadFromDisk(for: cacheKey) {
             devices = disk.devices
             lastUpdated = disk.updatedAt
         }
@@ -114,7 +116,9 @@ final class DeviceStore: ObservableObject {
 
     static func clearCache(for userId: Int, mode: HaMode) async {
         let key = "dinodia_devices_\(userId)_\(mode.rawValue)"
-        await DeviceCache.shared.remove(key)
+        await MainActor.run {
+            DeviceCache.shared.remove(key)
+        }
     }
 
     static func clearAll(for userId: Int) async {
